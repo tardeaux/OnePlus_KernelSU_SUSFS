@@ -31,6 +31,34 @@ jobs:
           cp -a ksun ksun-direct
           cp -a ksun ksun-v22fix
 
+      - name: Pre-adapt KSUN then apply SUSFS 2.3
+        shell: bash
+        run: |
+          set +e
+          cp -a ksun ksun-preadapt
+          cd ksun-preadapt
+          base="../kernel_patches/next/susfs_fix_patches/v2.2.0"
+
+          for p in fix_Kbuild.patch fix_init.c.patch fix_kernel_umount.c.patch fix_sucompat.c.patch fix_setuid_hook.c.patch fix_supercall.c.patch overwrite_hook_mode.patch; do
+            echo "=== PREAPPLY $p ==="
+            patch -p1 --forward --batch < "$base/$p"
+            echo "$p rc=$?"
+          done
+
+          find kernel -name '*.rej' -delete
+          find kernel -name '*.orig' -delete
+
+          echo "=== APPLY SUSFS 2.3 AFTER PREADAPT ==="
+          patch -p1 --forward --batch < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          echo "POST_ADAPT_RC=$?"
+          echo "=== POST-ADAPT REJECTS ==="
+          find kernel -name '*.rej' -print | sort
+          while IFS= read -r f; do
+            echo "----- $f -----"
+            cat "$f"
+          done < <(find kernel -name '*.rej' -print | sort)
+          exit 0
+
       - name: Git 3-way SUSFS 2.3 patch probe
         shell: bash
         run: |

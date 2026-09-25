@@ -1122,6 +1122,19 @@ runs:
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
             fi
             ;;
+          "v2.3.0")
+            if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
+              echo "Using native KernelSU-Next compatibility integration for SUSFS v2.3.0"
+              bash "${{ github.action_path }}/scripts/integrate-susfs23-ksun.sh" \
+                "$KSUN_FOLDER" \
+                "$SUSFS_FOLDER" \
+                "$COMMON_KERNEL_FOLDER" \
+                "${{ env.SUSFS_KERNEL_BRANCH }}"
+            else
+              cd "$KSU_FOLDER"
+              patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"
+            fi
+            ;;
           *)
             echo "::error::Unsupported SUSFS version: $susfs_version"
             exit 1
@@ -1195,7 +1208,22 @@ runs:
           fi
         fi
         
-        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
+        if [ "$susfs_version" = "v2.3.0" ] && [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
+          echo "Applying KSUN-safe SUSFS v2.3 filesystem patch"
+          patch -p1 --forward < "$SUSFS23_KSUN_PATCH"
+        else
+          patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
+        fi
+
+        rejects=$(find "$COMMON_KERNEL_FOLDER" -name '*.rej' -print || true)
+        if [ -n "$rejects" ]; then
+          echo "::error::SUSFS patch rejects remain:"
+          while IFS= read -r reject; do
+            echo "===== $reject ====="
+            cat "$reject"
+          done <<< "$rejects"
+          exit 1
+        fi
         
         # SUSFS's OPEN_REDIRECT code unconditionally calls VMA_PAD_START(), which
         # only exists on GKI branches that carry Google's page-size-migration

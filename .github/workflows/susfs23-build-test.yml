@@ -1,5 +1,5 @@
 name: SUSFS 2.3 One-Device Build Test
-# Validation rerun after SUSFS23_KSUN_PATCH shell handoff fix
+# Validation rerun after duplicate KSUN sucompat symbol fix
 
 on:
   push:

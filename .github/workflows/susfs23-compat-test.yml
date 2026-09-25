@@ -37,6 +37,8 @@ jobs:
           set +e
           cp -a ksun ksun-3way
           cd ksun-3way
+          git remote add upstream-kernelsu https://github.com/tiann/KernelSU.git
+          git fetch -q upstream-kernelsu master
           git apply --3way --whitespace=nowarn ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
           rc=$?
           echo "THREEWAY_RC=$rc"

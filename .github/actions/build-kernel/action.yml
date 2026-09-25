@@ -1130,6 +1130,13 @@ runs:
                 "$SUSFS_FOLDER" \
                 "$COMMON_KERNEL_FOLDER" \
                 "${{ env.SUSFS_KERNEL_BRANCH }}"
+              # GITHUB_ENV updates are visible only to subsequent Actions steps.
+              # We need this path again later in the current shell step.
+              SUSFS23_KSUN_PATCH="$COMMON_KERNEL_FOLDER/susfs50-v23-ksun.patch"
+              if [ ! -s "$SUSFS23_KSUN_PATCH" ]; then
+                echo "::error::SUSFS v2.3 KSUN filesystem patch was not generated: $SUSFS23_KSUN_PATCH"
+                exit 1
+              fi
             else
               cd "$KSU_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch"

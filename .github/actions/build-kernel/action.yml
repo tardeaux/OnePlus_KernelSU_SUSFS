@@ -22,6 +22,11 @@ inputs:
     required: false
     type: string
     default: ""
+  susfs_source_dir:
+    description: 'Optional pre-fetched SUSFS source directory. When valid, skips GitLab download.'
+    required: false
+    type: string
+    default: ""
   build_timestamp:
     description: 'Custom kernel build timestamp shown in uname -a (e.g. "Tue Feb 10 10:01:02 UTC 2026"). Leave empty to use the current build time.'
     required: false
@@ -768,57 +773,53 @@ runs:
         
         retry_fetch_archive() {
           local url="$1"
-          local branch="${2:-main}"
+          local ref="${2:-main}"
           local max_attempts=3
           local attempt=1
           
           local repo_name=$(basename "$url" .git)
-          local safe_branch=$(echo "$branch" | tr '/' '_')
-          local archive_name="${repo_name}_${safe_branch}.tar.gz"
+          local safe_ref=$(echo "$ref" | tr '/:' '__')
+          local archive_name="${repo_name}_${safe_ref}.tar.gz"
           local shm_path="/dev/shm/$archive_name"
-          
-          local nproc=$(nproc 2>/dev/null || echo 4)
-          
-          local aria_log_flags="--quiet --summary-interval=0"
-          if [ "${{ inputs.debug }}" = "true" ]; then
-              aria_log_flags="--summary-interval=5" # Show progress every 5s in debug
-          fi
-          
-          local aria2_headers=(
-            "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            "--header=Accept: */*"
-            "--header=Connection: keep-alive"
-          )
-          
           local download_url=""
+          
           if [[ "$url" == *"github.com"* ]]; then
-              download_url="${url%.git}/archive/refs/heads/${branch}.tar.gz"
+              download_url="${url%.git}/archive/${ref}.tar.gz"
           elif [[ "$url" == *"gitlab.com"* ]]; then
-              download_url="${url%.git}/-/archive/${branch}/${repo_name}-${branch}.tar.gz"
+              # GitLab repository archive API accepts branch, tag, or commit SHA.
+              # Use a single curl transfer rather than a 16-way aria2 request so
+              # parallel kernel jobs do not amplify GitLab rate limiting.
+              download_url="https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/archive.tar.gz?sha=${ref}"
           else
               echo "::error::Unsupported host: $url"
               return 1
           fi
           
           while [ $attempt -le $max_attempts ]; do
-              echo " Attempt $attempt/$max_attempts: High-speed fetch for $repo_name ($branch)"
+              echo " Attempt $attempt/$max_attempts: fetch for $repo_name ($ref)"
+              rm -f "$shm_path"
               
-              if aria2c -x16 -s16 -j16 -k1M --retry-wait=2 --max-tries=5 -d "/dev/shm" -o "$archive_name" --allow-overwrite=true "${aria2_headers[@]}" $aria_log_flags "$download_url"; then
+              if curl --fail --location --silent --show-error \
+                  --retry 3 --retry-all-errors --retry-delay 5 \
+                  --connect-timeout 30 --max-time 180 \
+                  -H "User-Agent: OnePlus-KernelSU-SUSFS-GitHub-Actions" \
+                  -o "$shm_path" "$download_url"; then
+                  rm -rf "$repo_name"
                   mkdir -p "$repo_name"
-                  if tar -I "pigz -p $nproc -b 256" -x --record-size=1M -f "$shm_path" -C "$repo_name" --strip-components=1 --no-same-owner; then
+                  if tar -xzf "$shm_path" -C "$repo_name" --strip-components=1 --no-same-owner; then
                       echo "✅ Success: $repo_name synced"
                       rm -f "$shm_path"
                       return 0
                   fi
               fi
               
-              echo "⚠️ Attempt $attempt failed, clearing RAM and retrying..."
+              echo "⚠️ Attempt $attempt failed; retrying with backoff..."
               rm -rf "$repo_name" "$shm_path" 2>/dev/null
-              sleep 5
+              sleep $((attempt * 10))
               attempt=$((attempt + 1))
           done
           
-          echo "::error::All attempts failed for $url"
+          echo "::error::All attempts failed for $url at ref $ref"
           return 1
         }
         
@@ -858,10 +859,23 @@ runs:
         
         if [ "${{ env.OP_SUSFS }}" = true ]; then
           echo "Using SUSFS branch/commit: $SUSFS_BRANCH"
-          if ! retry_fetch_archive "https://gitlab.com/simonpunk/susfs4ksu.git" "$SUSFS_BRANCH"; then
-            echo "::error::Failed to fetch SUSFS archive after multiple attempts"
-            exit 1
+          PREFETCHED_SUSFS="${{ inputs.susfs_source_dir }}"
+          
+          if [ -n "$PREFETCHED_SUSFS" ] && [ -f "$PREFETCHED_SUSFS/kernel_patches/include/linux/susfs.h" ]; then
+            echo "✅ Using pre-fetched SUSFS source: $PREFETCHED_SUSFS"
+            rm -rf "$SUSFS_FOLDER"
+            cp -a "$PREFETCHED_SUSFS" "$SUSFS_FOLDER"
+          else
+            if [ -n "$PREFETCHED_SUSFS" ]; then
+              echo "::warning::Pre-fetched SUSFS source is missing or invalid: $PREFETCHED_SUSFS"
+              echo "::warning::Falling back to a direct GitLab archive fetch."
+            fi
+            if ! retry_fetch_archive "https://gitlab.com/simonpunk/susfs4ksu.git" "$SUSFS_BRANCH"; then
+              echo "::error::Failed to fetch SUSFS archive after multiple attempts"
+              exit 1
+            fi
           fi
+          
           echo "SUSFS_COMMIT_SHA=$SUSFS_BRANCH" >> $GITHUB_ENV
         fi
         echo "✅ Dependencies cloned"

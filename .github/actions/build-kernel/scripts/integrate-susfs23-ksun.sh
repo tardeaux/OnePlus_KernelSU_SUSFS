@@ -209,8 +209,11 @@ int ksu_handle_stat(int *dfd, void *filename, int *flags) { return 0; }
 void ksu_handle_vfs_fstat(int fd, void *kstat_size_ptr) { }
 int ksu_handle_execveat(int *fd, void *filename_ptr, void *argv,
                         void *envp, int *flags) { return 0; }
-int ksu_handle_execveat_sucompat(int *fd, void *filename_ptr, void *argv,
-                                 void *envp, int *flags) { return 0; }
+/*
+ * KernelSU-Next 3.3.x already exports ksu_handle_execveat_sucompat() from
+ * feature/sucompat.c. Do not provide the raw-KSU compatibility stub here,
+ * otherwise vmlinux links with two definitions of the same symbol.
+ */
 int ksu_handle_faccessat(int *dfd, void *filename_user, int *mode,
                          int *flags) { return 0; }
 

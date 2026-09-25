@@ -900,13 +900,33 @@ runs:
         cd "$KERNEL_PLATFORM_FOLDER"
         echo "Adding KernelSU Next..."
         KSU_INPUT="${{ inputs.ksu_branch_or_hash }}"
-        if [ -z "$KSU_INPUT" ]; then
-          curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -
+
+        if [ "$OP_SUSFS" = "true" ]; then
+          KSU_SETUP_URL="https://raw.githubusercontent.com/pershoot/KernelSU-Next/dev-susfs/kernel/setup.sh"
+          echo "Using SUSFS-native KernelSU-Next source: pershoot/KernelSU-Next"
         else
-          curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s "$KSU_INPUT"
+          KSU_SETUP_URL="https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/dev/kernel/setup.sh"
+          echo "Using standard KernelSU-Next source: KernelSU-Next/KernelSU-Next"
+        fi
+
+        if [ -z "$KSU_INPUT" ]; then
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | bash -
+        else
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | bash -s "$KSU_INPUT"
+        fi
+
+        cd KernelSU-Next
+        ACTUAL_KSU_SHA=$(/usr/bin/git rev-parse HEAD)
+        if [ -n "$KSU_INPUT" ]; then
+          EXPECTED_KSU_SHA=$(/usr/bin/git rev-parse "$KSU_INPUT^{commit}" 2>/dev/null || true)
+          if [ -z "$EXPECTED_KSU_SHA" ] || [ "$ACTUAL_KSU_SHA" != "$EXPECTED_KSU_SHA" ]; then
+            echo "::error::KernelSU-Next setup did not honor requested ref '$KSU_INPUT'."
+            echo "::error::Expected: ${EXPECTED_KSU_SHA:-unresolved}; actual: $ACTUAL_KSU_SHA"
+            exit 1
+          fi
         fi
         git submodule update --init --recursive
-        cd KernelSU-Next/kernel
+        cd kernel
         
         COMMITS_COUNT=$(/usr/bin/git rev-list --count HEAD)
         

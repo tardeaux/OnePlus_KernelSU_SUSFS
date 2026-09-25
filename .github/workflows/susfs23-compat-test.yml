@@ -31,6 +31,25 @@ jobs:
           cp -a ksun ksun-direct
           cp -a ksun ksun-v22fix
 
+      - name: Git 3-way SUSFS 2.3 patch probe
+        shell: bash
+        run: |
+          set +e
+          cp -a ksun ksun-3way
+          cd ksun-3way
+          git apply --3way --whitespace=nowarn ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          rc=$?
+          echo "THREEWAY_RC=$rc"
+          echo "=== UNMERGED FILES ==="
+          git diff --name-only --diff-filter=U
+          echo "=== CONFLICT MARKERS ==="
+          grep -R -l '^<<<<<<< ' kernel 2>/dev/null || true
+          echo "=== STATUS ==="
+          git status --short
+          echo "=== DIFF CHECK ==="
+          git diff --check
+          exit 0
+
       - name: Direct SUSFS 2.3 patch probe
         shell: bash
         run: |

@@ -1,0 +1,92 @@
+name: SUSFS 2.3 Compatibility Probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/susfs23-compat-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prepare exact sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          KSUN_SHA=4364ceb4dc434f3d42ae37faec46c55787834816
+          SUSFS_SHA=357d43f13ea2d2bcff709fb63a8dbac76e1ebd64
+
+          git clone -q https://github.com/KernelSU-Next/KernelSU-Next.git ksun
+          git -C ksun checkout -q "$KSUN_SHA"
+
+          curl --fail --location --silent --show-error             --retry 5 --retry-all-errors --retry-delay 5             -o susfs.tar.gz             "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/archive.tar.gz?sha=$SUSFS_SHA"
+          mkdir susfs
+          tar -xzf susfs.tar.gz -C susfs --strip-components=1
+
+          git clone -q --depth=1 https://github.com/WildKernels/kernel_patches.git kernel_patches
+
+          cp -a ksun ksun-direct
+          cp -a ksun ksun-v22fix
+
+      - name: Direct SUSFS 2.3 patch probe
+        shell: bash
+        run: |
+          set +e
+          cd ksun-direct
+          patch -p1 --forward --batch < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          rc=$?
+          echo "DIRECT_PATCH_RC=$rc"
+          echo "=== REJECT FILES ==="
+          find kernel -name '*.rej' -print | sort
+          echo "=== REJECT CONTENT ==="
+          while IFS= read -r f; do
+            echo "----- $f -----"
+            cat "$f"
+          done < <(find kernel -name '*.rej' -print | sort)
+          echo "=== STATUS ==="
+          git status --short
+          echo "=== DIFF CHECK ==="
+          git diff --check
+          exit 0
+
+      - name: Probe reuse of v2.2 compatibility fixes
+        shell: bash
+        run: |
+          set +e
+          cd ksun-v22fix
+          patch -p1 --forward --batch < ../susfs/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          echo "Initial patch rc=$?"
+
+          echo "=== ORIGINAL REJECTS ==="
+          mapfile -t rejects < <(find kernel -name '*.rej' -print | sort)
+          printf '%s\n' "${rejects[@]}"
+
+          for rej in "${rejects[@]}"; do
+            base="$(basename "$rej" .rej)"
+            fix="../kernel_patches/next/susfs_fix_patches/v2.2.0/fix_${base}.patch"
+            if [ -f "$fix" ]; then
+              echo "=== TRY $fix for $rej ==="
+              patch -p1 --forward --batch < "$fix"
+              echo "fix rc=$?"
+            else
+              echo "=== NO v2.2 FIX FOR $rej ==="
+            fi
+          done
+
+          for extra in overwrite_hook_mode.patch ksu_toolkit.patch; do
+            p="../kernel_patches/next/susfs_fix_patches/v2.2.0/$extra"
+            echo "=== TRY $p ==="
+            patch -p1 --forward --batch < "$p"
+            echo "$extra rc=$?"
+          done
+
+          echo "=== REMAINING REJECT FILES ==="
+          find kernel -name '*.rej' -print | sort
+          echo "=== STATUS ==="
+          git status --short
+          echo "=== DIFF CHECK ==="
+          git diff --check
+          exit 0

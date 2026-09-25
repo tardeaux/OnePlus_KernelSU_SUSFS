@@ -33,7 +33,7 @@ on:
         description: 'Enter KernelSU build json'
         required: true
         type: string
-        default: '[{"type":"ksun","hash":"dev"}]'
+        default: '[{"type":"ksun","hash":"34d71c4d10a53cecb9759b4787944a2a65bb3d8d"}]'
       optimize_level:
         description: "Compiler optimization level"
         required: true
@@ -114,7 +114,7 @@ jobs:
           
           input="${{ github.event.inputs.op_model }}"
           ksu_options_raw='${{ github.event.inputs.ksu_options }}'
-          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "dev-susfs" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
+          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "34d71c4d10a53cecb9759b4787944a2a65bb3d8d" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
             echo "::error::ksu_options validation failed: $ksu_options_normalized"
             exit 1
           fi
@@ -213,9 +213,10 @@ jobs:
           if [ "$ksu_type" == "KSUN" ]; then
             KSU_REPO_OWNER="pershoot"
             KSU_REPO_NAME="KernelSU-Next"
-            if [ "$ksu_ref" = "dev" ]; then
-              echo "ℹ️ KSUN 'dev' requested with SUSFS workflow; resolving against SUSFS-native branch 'dev-susfs'."
-              ksu_ref="dev-susfs"
+            KSUN_SUSFS_STABLE_SHA="34d71c4d10a53cecb9759b4787944a2a65bb3d8d"
+            if [ "$ksu_ref" = "dev" ] || [ "$ksu_ref" = "dev-susfs" ] || [ -z "$ksu_ref" ]; then
+              echo "ℹ️ Locking KSUN to SUSFS 2.3.0 paired revision: $KSUN_SUSFS_STABLE_SHA"
+              ksu_ref="$KSUN_SUSFS_STABLE_SHA"
             fi
           else
             KSU_REPO_OWNER="tiann"
@@ -274,6 +275,8 @@ jobs:
           # SUSFS hash fetch
           SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
           GITLAB_PROJECT_PATH="simonpunk/susfs4ksu"
+          GITLAB_PROJECT_ID="simonpunk%2Fsusfs4ksu"
+          SUSFS_STABLE_VERSION="2.3.0"
           
           declare -A default_branches=(
             ["android12-5.10"]="gki-android12-5.10"
@@ -304,17 +307,39 @@ jobs:
           
           for key in "${active_keys[@]}"; do
             default_val="${default_branches[$key]}"
-            user_val="${user_inputs[$key]:-$default_val}"
+            explicit_val="${user_inputs[$key]:-}"
             
-            # Build GraphQL query — include blob fetch only when releasing
-            HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${user_val}\") { sha } } } }"
-            RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${user_val}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${user_val}\") { nodes { rawBlob } } } } }"
-            
-            if [ "${{ inputs.make_release }}" = "true" ]; then
-              GL_QUERY="$RELEASE_QUERY"
+            if [ -n "$explicit_val" ]; then
+              user_val="$explicit_val"
+              echo "  ℹ️ $key using explicit SUSFS override: $user_val"
             else
-              GL_QUERY="$HASH_QUERY"
+              echo "  🔒 $key resolving stable SUSFS v$SUSFS_STABLE_VERSION cutoff on $default_val"
+              stable_response=$(curl -sS --fail -G \
+                "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/repository/commits" \
+                --data-urlencode "ref_name=$default_val" \
+                --data-urlencode "search=Bump version to $SUSFS_STABLE_VERSION" \
+                --data-urlencode "per_page=100")
+              
+              user_val=$(echo "$stable_response" | jq -r --arg v "$SUSFS_STABLE_VERSION" '
+                [
+                  .[] |
+                  select(
+                    .title == ("Bump version to " + $v) or
+                    .title == ("Bump version to v" + $v)
+                  )
+                ][0].id // empty
+              ')
+              
+              if [ -z "$user_val" ]; then
+                echo "::error::Could not find stable SUSFS v$SUSFS_STABLE_VERSION cutoff on branch '$default_val'."
+                exit 1
+              fi
+              
+              echo "  📌 $key stable SUSFS v$SUSFS_STABLE_VERSION → $user_val"
             fi
+            
+            # Fetch the header on every run so the selected ref is version-verified.
+            GL_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${user_val}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${user_val}\") { nodes { rawBlob } } } } }"
             
             MAX_RETRIES=3
             RETRY_COUNT=0
@@ -330,10 +355,13 @@ jobs:
                 if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
                   echo "  ✅ Query for $key Success"
                   
-                  if [ "${{ inputs.make_release }}" = "true" ]; then
-                    extracted=$(echo "$RESPONSE" | jq -r '.data.project.repository.blobs.nodes[0].rawBlob // empty' | grep '#define SUSFS_VERSION' | awk -F'"' '{print $2}')
-                    susfs_versions_per_key[$key]="${extracted:-unknown}"
-                    echo "  ✅ $key → SUSFS_VERSION = ${extracted:-unknown}"
+                  extracted=$(echo "$RESPONSE" | jq -r '.data.project.repository.blobs.nodes[0].rawBlob // empty' | grep '#define SUSFS_VERSION' | awk -F'"' '{print $2}')
+                  susfs_versions_per_key[$key]="${extracted:-unknown}"
+                  echo "  ✅ $key → SUSFS_VERSION = ${extracted:-unknown}"
+                  
+                  if [ -z "$explicit_val" ] && [ "${extracted:-unknown}" != "$SUSFS_STABLE_VERSION" ]; then
+                    echo "::error::Stable SUSFS pin for $key resolved to version '${extracted:-unknown}', expected '$SUSFS_STABLE_VERSION'."
+                    exit 1
                   fi
                   
                   break
@@ -352,8 +380,8 @@ jobs:
             fi
             
             # Final Validation — SUSFS version
-            if [ "${{ inputs.make_release }}" = "true" ] && [ "${susfs_versions_per_key[$key]:-unknown}" = "unknown" ]; then
-              echo "::error::Could not extract SUSFS_VERSION from susfs.h for '$key' after $MAX_RETRIES attempts. Cannot proceed with release."
+            if [ "${susfs_versions_per_key[$key]:-unknown}" = "unknown" ]; then
+              echo "::error::Could not extract SUSFS_VERSION from susfs.h for '$key' after $MAX_RETRIES attempts."
               exit 1
             fi
             

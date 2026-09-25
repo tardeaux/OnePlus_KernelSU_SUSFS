@@ -1,5 +1,5 @@
 name: SUSFS 2.3 One-Device Build Test
-# Validation of the stable SUSFS 2.3.0 + paired KSUN integration
+# Validation of latest pershoot dev-susfs + current SUSFS branch
 
 on:
   push:
@@ -57,33 +57,13 @@ jobs:
             echo "CCACHE_DEPEND=true" >> "$GITHUB_ENV"
           fi
 
-      - name: Resolve stable SUSFS 2.3.0
-        id: susfs_pin
-        shell: bash
-        run: |
-          set -euo pipefail
-          response=$(curl -sS --fail -G \
-            "https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/commits" \
-            --data-urlencode "ref_name=gki-android14-6.1" \
-            --data-urlencode "search=Bump version to 2.3.0" \
-            --data-urlencode "per_page=100")
-          sha=$(echo "$response" | jq -r '
-            [.[] | select(.title == "Bump version to 2.3.0" or .title == "Bump version to v2.3.0")][0].id // empty
-          ')
-          if [ -z "$sha" ]; then
-            echo "::error::Could not resolve stable SUSFS 2.3.0 cutoff"
-            exit 1
-          fi
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "Stable SUSFS 2.3.0 SHA: $sha"
-
       - name: Build exact release sample
         uses: ./.github/actions/build-kernel
         with:
           op_config_json: '{"model":"OP-ACE-3-PRO","soc":"pineapple","branch":"wild/sm8650","manifest":"oneplus_ace3_pro_w.xml","android_version":"android14","kernel_version":"6.1","os_version":"A16","lto":"thin","zyc_compiler":"","c_compiler":"kernel_platform/prebuilts/clang/host/linux-x86/clang-r487747c/bin","rust_compiler":"","bindgen":"","rust_build":false,"disk_cleanup":false,"hmbird":false,"susfs":true,"opt":true,"ds":true,"bbg":true,"bbr":true,"bbr3":true,"ttl":true,"ip_set":true,"unicode":true,"ntsync":true,"blacklist_modules":"kernelsu,oplus_security_guard,oplus_qr_scan,oplus_score,oplus_vip_task,oplus_dns_cache,oplus_network_linkpower_module,oplus_data_module,oplus_secure_harden,oplus_security_keventupload,oplus_secure_guard_new,oplus_secure_guard,coresight_tpda,coresight_tgu,coresight_trace_noc,coresight_cti,coresight_qmi,coresight_dummy,coresight_remote_etm,coresight_tpdm,coresight_uetm,coresight_stm,coresight_tmc_sec,f_fs_ipc_log,qcom_iommu_debug,qti_battery_debug,rdbg,stm_heartbeat,stm_p_ost,stm_core,stm_ftrace,stm_console,spmi_pmic_arb_debug","uname":"OP-WILD"}'
           ksu_type: KSUN
-          ksu_branch_or_hash: 34d71c4d10a53cecb9759b4787944a2a65bb3d8d
-          susfs_commit_hash_or_branch: ${{ steps.susfs_pin.outputs.sha }}
+          ksu_branch_or_hash: dev-susfs
+          susfs_commit_hash_or_branch: gki-android14-6.1
           optimize_level: O2
           clean: true
           debug: false

@@ -114,7 +114,7 @@ jobs:
           
           input="${{ github.event.inputs.op_model }}"
           ksu_options_raw='${{ github.event.inputs.ksu_options }}'
-          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "dev" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
+          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "dev-susfs" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
             echo "::error::ksu_options validation failed: $ksu_options_normalized"
             exit 1
           fi
@@ -211,8 +211,12 @@ jobs:
           ksu_ref=$(echo "$ksu_options_normalized" | jq -r '.[0].hash')
           
           if [ "$ksu_type" == "KSUN" ]; then
-            KSU_REPO_OWNER="KernelSU-Next"
+            KSU_REPO_OWNER="pershoot"
             KSU_REPO_NAME="KernelSU-Next"
+            if [ "$ksu_ref" = "dev" ]; then
+              echo "ℹ️ KSUN 'dev' requested with SUSFS workflow; resolving against SUSFS-native branch 'dev-susfs'."
+              ksu_ref="dev-susfs"
+            fi
           else
             KSU_REPO_OWNER="tiann"
             KSU_REPO_NAME="KernelSU"

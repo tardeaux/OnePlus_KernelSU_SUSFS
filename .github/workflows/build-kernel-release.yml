@@ -652,7 +652,7 @@ jobs:
     if: |
       !cancelled() &&
       needs.set-op-model.result == 'success' &&
-      needs.prepare_susfs.result == 'success' &&
+      (needs.prepare_susfs.result == 'success' || needs.prepare_susfs.result == 'skipped') &&
       (needs.mirror_toolchain.result == 'success' || needs.mirror_toolchain.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
@@ -692,6 +692,7 @@ jobs:
         continue-on-error: true
 
       - name: Get pre-fetched SUSFS sources
+        if: ${{ matrix.susfs == true }}
         uses: actions/download-artifact@v8
         with:
           name: susfs-sources

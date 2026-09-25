@@ -1,5 +1,5 @@
 name: SUSFS 2.3 One-Device Build Test
-# Validation rerun using native KSUN SUSFS-capable revision
+# Validation rerun after restoring composite action manifest
 
 on:
   push:

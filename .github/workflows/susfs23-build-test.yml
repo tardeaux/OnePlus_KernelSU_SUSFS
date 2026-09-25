@@ -1,5 +1,5 @@
 name: SUSFS 2.3 One-Device Build Test
-# Validation rerun against pershoot dev-susfs
+# Validation rerun after skipping ccache persistence on clean builds
 
 on:
   push:

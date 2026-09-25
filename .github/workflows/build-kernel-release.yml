@@ -541,6 +541,74 @@ jobs:
     uses: ./.github/workflows/mirror-toolchains.yml
     secrets: inherit
 
+  prepare_susfs:
+    name: Prepare SUSFS sources (download once)
+    needs: set-op-model
+    if: ${{ needs.set-op-model.outputs.active_gki_keys != '' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch active SUSFS revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Fetch SUSFS sources once"
+          
+          declare -A hashes=(
+            ["android12-5.10"]="${{ needs.set-op-model.outputs.susfs_hash_android12_5_10 }}"
+            ["android13-5.15"]="${{ needs.set-op-model.outputs.susfs_hash_android13_5_15 }}"
+            ["android14-6.1"]="${{ needs.set-op-model.outputs.susfs_hash_android14_6_1 }}"
+            ["android15-6.6"]="${{ needs.set-op-model.outputs.susfs_hash_android15_6_6 }}"
+            ["android16-6.12"]="${{ needs.set-op-model.outputs.susfs_hash_android16_6_12 }}"
+          )
+          
+          mkdir -p susfs-sources
+          IFS=',' read -ra active_keys <<< "${{ needs.set-op-model.outputs.active_gki_keys }}"
+          
+          for key in "${active_keys[@]}"; do
+            [ -n "$key" ] || continue
+            ref="${hashes[$key]:-unknown}"
+            if [ -z "$ref" ] || [ "$ref" = "unknown" ]; then
+              echo "::error::No resolved SUSFS revision for $key"
+              exit 1
+            fi
+            
+            dest="susfs-sources/$key"
+            archive="/tmp/susfs-${key}.tar.gz"
+            url="https://gitlab.com/api/v4/projects/simonpunk%2Fsusfs4ksu/repository/archive.tar.gz?sha=${ref}"
+            
+            echo "Fetching $key at $ref"
+            rm -rf "$dest" "$archive"
+            mkdir -p "$dest"
+            
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 10 \
+              --connect-timeout 30 --max-time 300 \
+              -H "User-Agent: OnePlus-KernelSU-SUSFS-GitHub-Actions" \
+              -o "$archive" "$url"
+            
+            tar -xzf "$archive" -C "$dest" --strip-components=1 --no-same-owner
+            rm -f "$archive"
+            
+            if [ ! -f "$dest/kernel_patches/include/linux/susfs.h" ]; then
+              echo "::error::Downloaded SUSFS tree for $key is incomplete"
+              exit 1
+            fi
+            
+            echo "✅ $key ready"
+            # Keep GitLab requests comfortably below the archive endpoint rate limit.
+            sleep 13
+          done
+          
+          echo "::endgroup::"
+
+      - name: Upload SUSFS sources
+        uses: actions/upload-artifact@v7
+        with:
+          name: susfs-sources
+          path: susfs-sources
+          retention-days: 1
+          if-no-files-found: error
+
   prepare_ccache:
     name: Prepare ccache binary (download once)
     runs-on: ubuntu-latest
@@ -580,10 +648,11 @@ jobs:
 
   build:
     name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.branch }}, ${{ matrix.manifest }}, ${{ matrix.android_version }}, ${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }})
-    needs: [set-op-model, mirror_toolchain, prepare_ccache]
+    needs: [set-op-model, mirror_toolchain, prepare_ccache, prepare_susfs]
     if: |
       !cancelled() &&
       needs.set-op-model.result == 'success' &&
+      needs.prepare_susfs.result == 'success' &&
       (needs.mirror_toolchain.result == 'success' || needs.mirror_toolchain.result == 'skipped')
     runs-on: ubuntu-latest
     strategy:
@@ -621,6 +690,12 @@ jobs:
           name: ccache-binary
           path: ccache-dl
         continue-on-error: true
+
+      - name: Get pre-fetched SUSFS sources
+        uses: actions/download-artifact@v8
+        with:
+          name: susfs-sources
+          path: susfs-prefetch
 
       - name: Install ccache (ECS by cctv18, shared via artifact)
         run: |
@@ -698,6 +773,7 @@ jobs:
           ksu_type: ${{ matrix.ksu_type }}
           ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
           susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
+          susfs_source_dir: ${{ github.workspace }}/susfs-prefetch/${{ matrix.android_version }}-${{ matrix.kernel_version }}
           optimize_level: ${{ inputs.optimize_level }}
           build_timestamp: ${{ inputs.build_timestamp }}
           clean: ${{ inputs.clean_build }}
